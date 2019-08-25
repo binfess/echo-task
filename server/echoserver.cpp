@@ -26,24 +26,24 @@ void EchoServer::run()
 		return;
 	}
 
-	init_loop();
+	init_tcp();
+	init_udp();
 	event_loop();
 }
 
-void EchoServer::init_loop()
+void EchoServer::init_tcp()
 {
-	_tcp_listener = std::make_shared<netutils::TcpSocket>(netutils::NetworkAddress::IPv4);
 	_tcp_listener->setSocketOption(netutils::TcpSocket::ReuseAddressOption, 1);
 	_tcp_listener->setNonBlocking(true);
 
 	if (_tcp_listener->bind(netutils::NetworkAddress(netutils::NetworkAddress::IPv4, "0.0.0.0", 45000)))
 	{
-		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
+		throw std::runtime_error(std::string("init_tcp: ") + strerror(errno));
 	}
 
 	if (_tcp_listener->listen(10))
 	{
-		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
+		throw std::runtime_error(std::string("init_tcp: ") + strerror(errno));
 	}
 
 	_listenfd = _tcp_listener->handle();
@@ -54,10 +54,28 @@ void EchoServer::init_loop()
 
 	if (epoll_ctl(_epollfd, EPOLL_CTL_ADD, _listenfd, &ev))
 	{
-		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
+		throw std::runtime_error(std::string("init_tcp: ") + strerror(errno));
 	}
 }
 
+void EchoServer::init_udp()
+{
+	_udp_socket->setNonBlocking(true);
+	if (_udp_socket->bind(netutils::NetworkAddress(netutils::NetworkAddress::IPv4, "0.0.0.0", 45000)))
+	{
+		throw std::runtime_error(std::string("init_udp: ") + strerror(errno));
+	}
+
+	_udpfd = _udp_socket->handle();
+	epoll_event ev = {
+			.events = EPOLLIN,
+			.data = { .fd = _udpfd }
+	};
+	if (epoll_ctl(_epollfd, EPOLL_CTL_ADD, _udpfd, &ev) == -1)
+	{
+		throw std::runtime_error(std::string("init_udp: ") + strerror(errno));
+	}
+}
 
 void EchoServer::event_loop()
 {
@@ -83,16 +101,28 @@ void EchoServer::event_loop()
 			{
 				accept_connection();
 			}
-			else
+			else if (events[n].data.fd == _udpfd)
 			{
 				if (events[n].events & EPOLLOUT)
 				{
-					write_message(events[n].data.fd);
+					write_udp_echo();
 				}
 
 				if (events[n].events & EPOLLIN)
 				{
-					read_message(events[n].data.fd);
+					read_udp_echo();
+				}
+			}
+			else
+			{
+				if (events[n].events & EPOLLOUT)
+				{
+					write_tcp_echo(events[n].data.fd);
+				}
+
+				if (events[n].events & EPOLLIN)
+				{
+					read_tcp_echo(events[n].data.fd);
 				}
 			}
 		}
@@ -129,15 +159,15 @@ void EchoServer::process_message(std::string &message)
 	std::cout << message;
 }
 
-void EchoServer::read_message(int fd)
+void EchoServer::read_tcp_echo(int fd)
 {
 	static std::array<std::uint8_t, 65507> buf;
-	auto client = std::dynamic_pointer_cast<netutils::TcpSocket>(_tcp_clients[fd].sock);
+	auto &client = _tcp_clients[fd].sock;
 
 	size_t len = buf.size();
 	if (client->recv(buf.data(), len))
 	{
-		std::cerr << "read_message: " << strerror(errno) << std::endl;
+		std::cerr << "read_tcp_echo: " << strerror(errno) << std::endl;
 		return;
 	}
 
@@ -153,13 +183,13 @@ void EchoServer::read_message(int fd)
 	};
 	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, client->handle(), &ev) == -1)
 	{
-		throw std::runtime_error(std::string("read_message: ") + strerror(errno));
+		throw std::runtime_error(std::string("read_tcp_echo: ") + strerror(errno));
 	}
 }
 
-void EchoServer::write_message(int fd)
+void EchoServer::write_tcp_echo(int fd)
 {
-	auto client = std::dynamic_pointer_cast<netutils::TcpSocket>(_tcp_clients[fd].sock);
+	auto &client = _tcp_clients[fd].sock;
 
 	auto &sent_bytes = _tcp_clients[fd].requests.front().first;
 	std::string &message = _tcp_clients[fd].requests.front().second;
@@ -167,7 +197,7 @@ void EchoServer::write_message(int fd)
 	auto remain_bytes = message.size() - sent_bytes;
 	if (client->send(message.data() + sent_bytes, remain_bytes) == -1)
 	{
-		std::cerr << "write_message: " << strerror(errno) << std::endl;
+		std::cerr << "write_tcp_echo: " << strerror(errno) << std::endl;
 		return;
 	}
 
@@ -184,6 +214,66 @@ void EchoServer::write_message(int fd)
 	};
 	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, client->handle(), &ev) == -1)
 	{
-		throw std::runtime_error(std::string("write_message: ") + strerror(errno));
+		throw std::runtime_error(std::string("write_tcp_echo: ") + strerror(errno));
+	}
+}
+
+void EchoServer::read_udp_echo()
+{
+	netutils::NetworkAddress peer;
+	static std::array<std::uint8_t, 65507> buf;
+
+	size_t len = buf.size();
+	if (_udp_socket->recvFrom(buf.data(), len, peer))
+	{
+		std::cerr << "read_udp_echo: " << strerror(errno) << std::endl;
+		return;
+	}
+
+	std::string message((char*) buf.data(), len);
+
+	process_message(message);
+
+	_udp_requests.emplace_back(0, std::move(message), std::move(peer));
+
+	epoll_event ev = {
+			.events = EPOLLIN | EPOLLOUT,
+			.data = { .fd = _udp_socket->handle() }
+	};
+	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, _udp_socket->handle(), &ev) == -1)
+	{
+		throw std::runtime_error(std::string("read_udp_echo: ") + strerror(errno));
+	}
+}
+
+void EchoServer::write_udp_echo()
+{
+	auto &req_tuple = _udp_requests.front();
+
+	auto &sent_bytes = std::get<0>(req_tuple);
+	std::string &message = std::get<1>(req_tuple);
+	auto &peer = std::get<2>(req_tuple);
+
+	auto remain_bytes = message.size() - sent_bytes;
+	if (_udp_socket->sendTo(message.data() + sent_bytes, remain_bytes, peer) == -1)
+	{
+		std::cerr << "write_tcp_echo: " << strerror(errno) << std::endl;
+		return;
+	}
+
+	sent_bytes += remain_bytes;
+	if (sent_bytes == message.size())
+	{
+		/* message was sent */
+		_udp_requests.pop_front();
+	}
+
+	epoll_event ev = {
+			.events = EPOLLIN,
+			.data = { .fd = _udp_socket->handle() }
+	};
+	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, _udp_socket->handle(), &ev) == -1)
+	{
+		throw std::runtime_error(std::string("write_tcp_echo: ") + strerror(errno));
 	}
 }
