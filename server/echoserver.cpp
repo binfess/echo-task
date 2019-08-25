@@ -1,7 +1,9 @@
 #include "echoserver.hpp"
 
+#include <regex>
 #include <unistd.h>
 #include <cstring>
+#include <cctype>
 
 #include <tcpsocket.hpp>
 
@@ -156,7 +158,40 @@ void EchoServer::accept_connection()
 
 void EchoServer::process_message(std::string &message)
 {
-	std::cout << message;
+	std::cout << "message: " << message << std::endl;
+
+	/* find numbers in range 0...9 */
+	std::vector<int> numbers;
+
+	for (int i = 0; i < message.size(); i++)
+	{
+		if ((i == 0 || !std::isdigit(message[i - 1])) && std::isdigit(message[i]) &&
+		    (i == message.size() - 1 || !std::isdigit(message[i + 1])))
+		{
+			numbers.emplace_back(message[i] - '0');
+		}
+	}
+
+	if (!numbers.size())
+	{
+		std::cout << "failed to find numbers" << std::endl;
+		return;
+	}
+
+	/* calc sum  */
+	int sum = 0;
+	std::for_each(std::begin(numbers), std::end(numbers), [&sum] (int number) { sum += number; });
+
+	std::cout << "sum " << sum << std::endl;
+
+	/* sort numbers */
+	std::sort(std::begin(numbers), std::end(numbers), std::greater<int>());
+
+	/* get min and max values */
+	int max = numbers.front(), min = numbers.back();
+
+	std::cout << "max " << max << " min " << min << std::endl;
+
 }
 
 void EchoServer::read_tcp_echo(int fd)
