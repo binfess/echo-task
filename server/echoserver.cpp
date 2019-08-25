@@ -19,35 +19,34 @@ EchoServer::~EchoServer()
 	}
 }
 
-int EchoServer::run()
+void EchoServer::run()
 {
-	if (_epollfd == -1 || init_loop())
+	if (_epollfd == -1)
 	{
-		return -1;
+		return;
 	}
 
-	return event_loop();
+	init_loop();
+	event_loop();
 }
 
-int EchoServer::init_loop()
+void EchoServer::init_loop()
 {
-	auto listener = std::make_shared<netutils::TcpSocket>(netutils::NetworkAddress::IPv4);
-	listener->setSocketOption(netutils::TcpSocket::ReuseAddressOption, 1);
-	listener->setNonBlocking(true);
+	_tcp_listener = std::make_shared<netutils::TcpSocket>(netutils::NetworkAddress::IPv4);
+	_tcp_listener->setSocketOption(netutils::TcpSocket::ReuseAddressOption, 1);
+	_tcp_listener->setNonBlocking(true);
 
-	if (listener->bind(netutils::NetworkAddress(netutils::NetworkAddress::IPv4, "0.0.0.0", 45000)))
+	if (_tcp_listener->bind(netutils::NetworkAddress(netutils::NetworkAddress::IPv4, "0.0.0.0", 45000)))
 	{
-		std::cerr << strerror(errno) << std::endl;
-		return -1;
+		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
 	}
 
-	if (listener->listen(10))
+	if (_tcp_listener->listen(10))
 	{
-		std::cerr << strerror(errno) << std::endl;
-		return -1;
+		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
 	}
 
-	_listenfd = listener->handle();
+	_listenfd = _tcp_listener->handle();
 	epoll_event ev = {
 			.events = EPOLLIN,
 			.data = { .fd = _listenfd }
@@ -55,58 +54,60 @@ int EchoServer::init_loop()
 
 	if (epoll_ctl(_epollfd, EPOLL_CTL_ADD, _listenfd, &ev))
 	{
-		std::cerr << strerror(errno) << std::endl;
-		return -1;
+		throw std::runtime_error(std::string("init_loop: ") + strerror(errno));
 	}
-
-	_handles.emplace(_listenfd, echo_client_t(listener));
-
-	return 0;
 }
 
 
-int EchoServer::event_loop()
+void EchoServer::event_loop()
 {
 	epoll_event events[MAX_EPOLL_EVENTS];
-	std::array<char, 65507> messageBuffer{0};
-
 	for (;;)
 	{
 		int nfds = epoll_wait(_epollfd, events, MAX_EPOLL_EVENTS, -1);
 		if (nfds == -1)
 		{
-			break;
+			throw std::runtime_error(std::string("event_loop: ") + strerror(errno));
 		}
 
 		for (int n = 0; n < nfds; ++n)
 		{
+			if ((events[n].events & EPOLLERR) || (events[n].events & EPOLLHUP))
+			{
+				/* close connection */
+				_tcp_clients.erase(events->data.fd);
+				continue;
+			}
+
 			if (events[n].data.fd == _listenfd)
 			{
-				echo_client_t &client = _handles[_listenfd];
-				accept_connection(std::dynamic_pointer_cast<netutils::TcpSocket>(client.sock));
-			}
-			else if (events[n].events & EPOLLIN)
-			{
-				std::cout << "ready to read" << std::endl;
+				accept_connection();
 			}
 			else
 			{
-				std::cout << "ready to cho-nibudb" << std::endl;
+				if (events[n].events & EPOLLOUT)
+				{
+					write_message(events[n].data.fd);
+				}
+
+				if (events[n].events & EPOLLIN)
+				{
+					read_message(events[n].data.fd);
+				}
 			}
 		}
 	}
-
-	return 0;
 }
 
-int EchoServer::accept_connection(std::shared_ptr<netutils::TcpSocket> listener)
+void EchoServer::accept_connection()
 {
 	auto client = std::make_shared<netutils::TcpSocket>(netutils::NetworkAddress::IPv4);
 
 	netutils::NetworkAddress address;
-	if (listener->accept(*client, address))
+	if (_tcp_listener->accept(*client, address))
 	{
-		std::cerr << strerror(errno) << std::endl;
+		std::cerr << "accept_connection: " << strerror(errno) << std::endl;
+		return;
 	}
 
 	client->setNonBlocking(true);
@@ -117,21 +118,72 @@ int EchoServer::accept_connection(std::shared_ptr<netutils::TcpSocket> listener)
 	};
 	if (epoll_ctl(_epollfd, EPOLL_CTL_ADD, client->handle(), &ev) == -1)
 	{
-		perror("epoll_ctl: conn_sock");
-		exit(EXIT_FAILURE);
+		throw std::runtime_error(std::string("accept_connection: ") + strerror(errno));
 	}
 
-	std::cout << "new connection" << std::endl;
-
-	return 0;
+	_tcp_clients.emplace(client->handle(), echo_client_t(client));
 }
 
-int EchoServer::process_message(std::string &message)
+void EchoServer::process_message(std::string &message)
 {
-	return 0;
+	std::cout << message;
 }
 
-int EchoServer::read_message(int fd)
+void EchoServer::read_message(int fd)
 {
-	return 0;
+	static std::array<std::uint8_t, 65507> buf;
+	auto client = std::dynamic_pointer_cast<netutils::TcpSocket>(_tcp_clients[fd].sock);
+
+	size_t len = buf.size();
+	if (client->recv(buf.data(), len))
+	{
+		std::cerr << "read_message: " << strerror(errno) << std::endl;
+		return;
+	}
+
+	std::string message((char*) buf.data(), len);
+
+	process_message(message);
+
+	_tcp_clients[fd].requests.emplace_back(0, std::move(message));
+
+	epoll_event ev = {
+			.events = EPOLLIN | EPOLLOUT,
+			.data = { .fd = client->handle() }
+	};
+	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, client->handle(), &ev) == -1)
+	{
+		throw std::runtime_error(std::string("read_message: ") + strerror(errno));
+	}
+}
+
+void EchoServer::write_message(int fd)
+{
+	auto client = std::dynamic_pointer_cast<netutils::TcpSocket>(_tcp_clients[fd].sock);
+
+	auto &sent_bytes = _tcp_clients[fd].requests.front().first;
+	std::string &message = _tcp_clients[fd].requests.front().second;
+
+	auto remain_bytes = message.size() - sent_bytes;
+	if (client->send(message.data() + sent_bytes, remain_bytes) == -1)
+	{
+		std::cerr << "write_message: " << strerror(errno) << std::endl;
+		return;
+	}
+
+	sent_bytes += remain_bytes;
+	if (sent_bytes == message.size())
+	{
+		/* message was sent */
+		_tcp_clients[fd].requests.pop_front();
+	}
+
+	epoll_event ev = {
+			.events = EPOLLIN,
+			.data = { .fd = client->handle() }
+	};
+	if (epoll_ctl(_epollfd, EPOLL_CTL_MOD, client->handle(), &ev) == -1)
+	{
+		throw std::runtime_error(std::string("write_message: ") + strerror(errno));
+	}
 }

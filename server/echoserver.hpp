@@ -25,21 +25,25 @@ public:
 	EchoServer();
 	~EchoServer();
 
-	int run();
+	void run();
 
 private:
-	int init_loop();
-	int event_loop();
+	void init_loop();
+	void event_loop();
 
-	int accept_connection(std::shared_ptr<netutils::TcpSocket> listener);
-	int read_message(int fd);
-	int process_message(std::string &message);
+	void accept_connection();
+	void read_message(int fd);
+	void process_message(std::string &message);
+	void write_message(int fd);
 
 private:
 	int _epollfd = epoll_create1(0);
 	int _listenfd{-1};
 	int _udpfd{-1};
-	std::unordered_map<int, echo_client_t> _handles;
+
+	std::shared_ptr<echo_client_t> _udp_socket;
+	std::shared_ptr<netutils::TcpSocket> _tcp_listener;
+	std::unordered_map<int, echo_client_t> _tcp_clients;
 
 };
 

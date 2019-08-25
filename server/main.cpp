@@ -4,11 +4,15 @@
 
 int main(int argc, char **argv)
 {
-	EchoServer server;
-
-	if (server.run())
+	try
 	{
-		std::cerr << "Failed to run echo server" << std::endl;
+		EchoServer server;
+		server.run();
+	}
+	catch (std::exception &ex)
+	{
+		std::cerr << ex.what() << std::endl;
+		exit(EXIT_FAILURE);
 	}
 
 	return 0;
