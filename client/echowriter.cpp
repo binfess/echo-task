@@ -1,6 +1,6 @@
 #include "echowriter.hpp"
 
-#include <iostream> // TODO: remove
+#include <iostream>
 
 void EchoWriter::doEchoRequest(std::string message)
 {

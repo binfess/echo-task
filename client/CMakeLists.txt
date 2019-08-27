@@ -4,6 +4,6 @@ project(echo-client)
 
 set(CMAKE_CXX_STANDARD 11)
 
-add_executable(echo-client main.cpp echowriter.cpp echowriter.hpp abstractworker.cpp abstractworker.hpp)
+add_executable(echo-client main.cpp echowriter.cpp echowriter.hpp abstractworker.cpp abstractworker.hpp echoreader.cpp echoreader.hpp)
 
 target_link_libraries (echo-client LINK_PUBLIC netutils pthread)
