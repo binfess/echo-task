@@ -24,15 +24,13 @@ int main()
 		reader.start();
 		writer.start();
 
-		writer.doEchoRequest("test");
-		writer.doEchoRequest("123123");
-
-		reader.stop();
-		std::cout << "reader stop" << std::endl;
-
-		writer.stop();
-		std::cout << "writer stop" << std::endl;
+		std::string message;
+		while (!std::getline(std::cin, message).eof())
+		{
+			writer.doEchoRequest(message);
+		}
 	}
+
 
 	return 0;
 }

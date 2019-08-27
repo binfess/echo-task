@@ -16,7 +16,7 @@ public:
 	EchoReader(std::shared_ptr<netutils::AbstractSocket> socket) : _socket(socket) { }
 
 private:
-	void thread_work() override;
+	void thread_work() final;
 
 private:
 	std::shared_ptr<netutils::AbstractSocket> _socket;

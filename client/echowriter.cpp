@@ -32,6 +32,15 @@ void EchoWriter::thread_work()
 
 void EchoWriter::send_message(const std::string &message)
 {
+	/* split and send message */
 	auto size = message.size();
 	_socket->send(message.data(), size);
+
+/*	ssize_t pos{0};
+	while (pos != size)
+	{
+		auto bytes_ = size - pos;
+		_socket->send(message.data() + pos, (size - pos > 1) ? 65507 : (size - pos));
+		pos += size;
+	}*/
 }
