@@ -1,6 +1,7 @@
 #include "echoreader.hpp"
 
 #include <iostream>
+#include <cstring>
 
 #include <sys/epoll.h>
 
@@ -25,9 +26,22 @@ void EchoReader::thread_work()
 		auto size = buffer.size();
 		if (_socket->recv(buffer.data(), size))
 		{
-			locker.lock();
-			continue;
+			if (errno == EAGAIN)
+			{
+				locker.lock();
+				continue;
+			}
+
+			std::cerr << "recv: " << std::strerror(errno) << std::endl;
+			exit(EXIT_FAILURE);
 		}
+
+		if (size == 0)
+		{
+			std::cerr << "recv: Connection was closed" << std::endl;
+			exit(EXIT_FAILURE);
+		}
+
 
 		std::string message(buffer.data(), size);
 		std::cout << message << std::endl;
